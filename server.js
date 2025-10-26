@@ -9,10 +9,24 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors({
-  origin: 'http://localhost:5173', // URL frontend
-  credentials: true
-}));
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://uchida-fe.vercel.app",
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps, curl, etc)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.indexOf(origin) === -1) {
+        return callback(new Error("CORS policy disallows access"), false);
+      }
+      return callback(null, true);
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(session({
   secret: process.env.SESSION_SECRET || 'uchida-secret-key',
