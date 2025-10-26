@@ -33,8 +33,8 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: { 
-    secure: process.env.NODE_ENV === 'production', // true di production (HTTPS)
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // PENTING!
+    secure: true, // true di production (HTTPS)
+    sameSite: 'none', // PENTING!
     httpOnly: true, // Tambahkan ini untuk security
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   },
