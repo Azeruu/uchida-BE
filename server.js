@@ -32,7 +32,13 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'uchida-secret-key',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 } // 24 hours
+  cookie: { 
+    secure: process.env.NODE_ENV === 'production', // true di production (HTTPS)
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // PENTING!
+    httpOnly: true, // Tambahkan ini untuk security
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  },
+  proxy: true
 }));
 
 // Supabase Client
