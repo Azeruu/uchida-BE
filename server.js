@@ -1,63 +1,106 @@
 // server.js
 const express = require('express');
 const cors = require('cors');
-const session = require('express-session');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET || 'uchida-jwt-secret-key-2024';
 
-// Middleware
 const allowedOrigins = [
   "http://localhost:5173",
   "https://uchida-fe.vercel.app",
 ];
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // Allow requests with no origin (like mobile apps, curl, etc)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.indexOf(origin) === -1) {
-        return callback(new Error("CORS policy disallows access"), false);
-      }
-      return callback(null, true);
-    },
-    credentials: true,
-  })
-);
+// ============ MIDDLEWARE ============
+app.use(cookieParser());
 app.use(express.json());
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'uchida-secret-key',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { 
-    secure: true, // true di production (HTTPS)
-    sameSite: 'none', // PENTING!
-    httpOnly: true, // Tambahkan ini untuk security
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      return callback(new Error("CORS policy disallows access"), false);
+    }
+    return callback(null, true);
   },
-  proxy: true
+  credentials: true,
 }));
 
-// Supabase Client
+// JWT Verification Middleware
+const verifyToken = (req, res, next) => {
+  const token = req.cookies.auth_token;
+  
+  console.log('🔍 Checking token:', token ? 'exists' : 'not found');
+  
+  if (!token) {
+    return res.status(401).json({ 
+      success: false, 
+      message: 'Tidak ada token, silakan login' 
+    });
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    console.log('✅ Token verified:', decoded);
+    next();
+  } catch (error) {
+    console.error('❌ Token verification failed:', error.message);
+    return res.status(401).json({ 
+      success: false, 
+      message: 'Token tidak valid atau expired' 
+    });
+  }
+};
+
+// ✅ PERBAIKAN: requireAdmin pakai JWT
+const requireAdmin = (req, res, next) => {
+  const token = req.cookies.auth_token;
+  
+  if (!token) {
+    return res.status(401).json({ 
+      success: false, 
+      message: 'Tidak ada token, silakan login' 
+    });
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role === 'admin') {
+      req.user = decoded;
+      next();
+    } else {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Akses ditolak. Hanya admin yang bisa mengakses.' 
+      });
+    }
+  } catch (error) {
+    return res.status(401).json({ 
+      success: false, 
+      message: 'Token tidak valid atau expired' 
+    });
+  }
+};
+
+// ============ SUPABASE ============
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
 
-// Supabase Admin Client (for server-side operations)
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
-// Helper to generate random pairs (3-9 only)
+// ============ HELPER FUNCTIONS ============
 function generatePairs(count = 525) {
   const result = [];
   for (let i = 0; i < count; i++) {
-    // Angka 3-9 saja (tidak ada 0, 1, 2)
     const a = Math.floor(Math.random() * 7) + 3; // 3-9
     const b = Math.floor(Math.random() * 7) + 3; // 3-9
     result.push({ a, b });
@@ -65,20 +108,33 @@ function generatePairs(count = 525) {
   return result;
 }
 
-// Routes
+// ============ ROUTES ============
 
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Server is running' });
 });
 
-// Authentication routes
+// ============ AUTH ROUTES ============
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
   
-  // Check admin credentials
   if (email === 'admin.kim@gmail.com' && password === 'kimkantor1') {
-    req.session.user = { email, role: 'admin' };
+    const token = jwt.sign(
+      { email, role: 'admin' },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+    
+    res.cookie('auth_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000
+    });
+    
+    console.log('✅ Login successful, token created');
+    
     res.json({ 
       success: true, 
       message: 'Login berhasil',
@@ -93,31 +149,31 @@ app.post('/api/login', (req, res) => {
 });
 
 app.post('/api/logout', (req, res) => {
-  req.session.destroy();
-  res.json({ success: true, message: 'Logout berhasil' });
+  res.clearCookie('auth_token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
+  });
+  
+  res.json({ 
+    success: true, 
+    message: 'Logout berhasil' 
+  });
 });
 
-app.get('/api/me', (req, res) => {
-  if (req.session.user) {
-    res.json({ success: true, user: req.session.user });
-  } else {
-    res.status(401).json({ success: false, message: 'Tidak ada session aktif' });
-  }
+app.get('/api/me', verifyToken, (req, res) => {
+  res.json({
+    success: true,
+    user: {
+      email: req.user.email,
+      role: req.user.role
+    }
+  });
 });
 
-// Middleware to check admin authentication
-const requireAdmin = (req, res, next) => {
-  if (req.session.user && req.session.user.role === 'admin') {
-    next();
-  } else {
-    res.status(403).json({ success: false, message: 'Akses ditolak. Login sebagai admin diperlukan.' });
-  }
-};
-
-// Get current test configuration
+// ============ CONFIG ROUTES ============
 app.get('/api/config', async (req, res) => {
   try {
-    // Get the latest questions config from database using admin client
     const { data: questionsData, error: questionsError } = await supabaseAdmin
       .from('questions')
       .select('*')
@@ -126,7 +182,10 @@ app.get('/api/config', async (req, res) => {
 
     if (questionsError) {
       console.error('Supabase error:', questionsError);
-      return res.status(500).json({ error: questionsError.message });
+      return res.status(500).json({ 
+        success: false,
+        error: questionsError.message 
+      });
     }
 
     let config = {
@@ -139,25 +198,25 @@ app.get('/api/config', async (req, res) => {
       const latest = questionsData[0];
       config.questionCount = latest.total_questions || 525;
       config.durationSeconds = latest.duration_seconds || 15 * 60;
-      
-      // Generate pairs based on questionCount
       config.pairs = generatePairs(config.questionCount);
     } else {
-      // If no data in database, create default
       config.pairs = generatePairs(config.questionCount);
     }
 
     res.json({
+      success: true,
       message: 'Config retrieved successfully',
       data: config
     });
   } catch (error) {
     console.error('Server error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
   }
 });
 
-// Update test configuration (admin only)
 app.post('/api/config', requireAdmin, async (req, res) => {
   try {
     const { durationSeconds, questionCount, pairs, regenerate } = req.body || {};
@@ -173,7 +232,6 @@ app.post('/api/config', requireAdmin, async (req, res) => {
       finalDurationSeconds = Math.floor(durationSeconds);
     }
 
-    // Generate pairs based on questionCount
     let finalPairs = generatePairs(finalQuestionCount);
 
     if (regenerate === true) {
@@ -181,7 +239,6 @@ app.post('/api/config', requireAdmin, async (req, res) => {
     }
 
     if (Array.isArray(pairs) && pairs.length > 0) {
-      // Sanitize to ensure each pair has integers 3-9
       const sanitizedPairs = pairs
         .map(p => ({ a: Number(p.a), b: Number(p.b) }))
         .filter(p => Number.isInteger(p.a) && Number.isInteger(p.b) && p.a >= 3 && p.a <= 9 && p.b >= 3 && p.b <= 9);
@@ -191,7 +248,6 @@ app.post('/api/config', requireAdmin, async (req, res) => {
       }
     }
 
-    // Save to database using admin client
     const { data, error } = await supabaseAdmin
       .from('questions')
       .insert([
@@ -205,7 +261,10 @@ app.post('/api/config', requireAdmin, async (req, res) => {
 
     if (error) {
       console.error('Supabase error:', error);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
     }
 
     const config = {
@@ -215,16 +274,20 @@ app.post('/api/config', requireAdmin, async (req, res) => {
     };
 
     res.json({
+      success: true,
       message: 'Config updated successfully',
       data: config
     });
   } catch (error) {
     console.error('Server error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
   }
 });
 
-// Get questions history (admin only)
+// ============ QUESTIONS ROUTES ============
 app.get('/api/questions', requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -234,20 +297,27 @@ app.get('/api/questions', requireAdmin, async (req, res) => {
 
     if (error) {
       console.error('Supabase error:', error);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
     }
 
     res.json({
+      success: true,
       message: 'Questions history retrieved successfully',
       data: data
     });
   } catch (error) {
     console.error('Server error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
   }
 });
 
-// Submit test result
+// ============ TEST RESULTS ROUTES ============
 app.post('/api/test-results', async (req, res) => {
   try {
     const {
@@ -260,14 +330,13 @@ app.post('/api/test-results', async (req, res) => {
       answers
     } = req.body;
 
-    // Validate required fields
     if (!participantName || !participantEmail) {
       return res.status(400).json({ 
+        success: false,
         error: 'participantName and participantEmail are required' 
       });
     }
 
-    // Insert test result
     const { data, error } = await supabase
       .from('test_results')
       .insert([
@@ -286,20 +355,26 @@ app.post('/api/test-results', async (req, res) => {
 
     if (error) {
       console.error('Supabase error:', error);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
     }
 
     res.status(201).json({
+      success: true,
       message: 'Test result saved successfully',
       data: data[0]
     });
   } catch (error) {
     console.error('Server error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
   }
 });
 
-// Get all test results
 app.get('/api/test-results', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -309,20 +384,26 @@ app.get('/api/test-results', async (req, res) => {
 
     if (error) {
       console.error('Supabase error:', error);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
     }
 
     res.json({
+      success: true,
       message: 'Test results retrieved successfully',
       data: data
     });
   } catch (error) {
     console.error('Server error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
   }
 });
 
-// Get test result by ID
 app.get('/api/test-results/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -335,24 +416,33 @@ app.get('/api/test-results/:id', async (req, res) => {
 
     if (error) {
       console.error('Supabase error:', error);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
     }
 
     if (!data) {
-      return res.status(404).json({ error: 'Test result not found' });
+      return res.status(404).json({ 
+        success: false,
+        error: 'Test result not found' 
+      });
     }
 
     res.json({
+      success: true,
       message: 'Test result retrieved successfully',
       data: data
     });
   } catch (error) {
     console.error('Server error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
   }
 });
 
-// Get test results by email
 app.get('/api/test-results/email/:email', async (req, res) => {
   try {
     const { email } = req.params;
@@ -365,20 +455,26 @@ app.get('/api/test-results/email/:email', async (req, res) => {
 
     if (error) {
       console.error('Supabase error:', error);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
     }
 
     res.json({
+      success: true,
       message: 'Test results retrieved successfully',
       data: data
     });
   } catch (error) {
     console.error('Server error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
   }
 });
 
-// Get statistics
 app.get('/api/statistics', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -387,7 +483,10 @@ app.get('/api/statistics', async (req, res) => {
 
     if (error) {
       console.error('Supabase error:', error);
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
     }
 
     const statistics = {
@@ -407,16 +506,39 @@ app.get('/api/statistics', async (req, res) => {
     };
 
     res.json({
+      success: true,
       message: 'Statistics retrieved successfully',
       data: statistics
     });
   } catch (error) {
     console.error('Server error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
   }
 });
 
-// Start server
+// ============ ERROR HANDLERS ============
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error('Global error handler:', err);
+  res.status(500).json({
+    success: false,
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : 'Server error'
+  });
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'Endpoint not found'
+  });
+});
+
+// ============ START SERVER ============
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/api/health`);
