@@ -9,17 +9,26 @@ const cookieParser = require('cookie-parser');
 const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'uchida-jwt-secret-key-2024';
+// Trust proxy is required so Express knows the request is HTTPS behind Render's proxy
+app.set('trust proxy', 1);
 
+// Allow dynamic frontend URL via env, plus localhost for development
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://uchida-fe.vercel.app";
 const allowedOrigins = [
   "http://localhost:5173",
-  "https://uchida-fe.vercel.app",
+  FRONTEND_URL,
 ];
 
 // ============ MIDDLEWARE ============
 app.use(cookieParser());
 app.use(express.json());
 app.use(cors({
-  origin: allowedOrigins,
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl) or same-origin
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
 }));
 
