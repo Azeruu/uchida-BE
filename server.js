@@ -14,9 +14,16 @@ app.set('trust proxy', 1);
 
 // Allow dynamic frontend URL via env, plus localhost for development
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://uchida-fe.vercel.app";
+// Support multiple allowed origins via comma-separated env
+const EXTRA_ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map(o => o.trim())
+  .filter(Boolean);
+
 const allowedOrigins = [
   "http://localhost:5173",
   FRONTEND_URL,
+  ...EXTRA_ALLOWED_ORIGINS,
 ];
 
 // ============ MIDDLEWARE ============
@@ -26,10 +33,18 @@ app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl) or same-origin
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
+
+    const isAllowed =
+      allowedOrigins.includes(origin) ||
+      // Allow all vercel preview domains
+      origin.endsWith('.vercel.app');
+
+    if (isAllowed) return callback(null, true);
+    console.warn('CORS blocked origin:', origin);
     return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
+  optionsSuccessStatus: 204,
 }));
 
 // JWT Verification Middleware
