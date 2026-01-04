@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
-import { PrismaClient } from "../../src/generated/prisma/client.js";
+import { PrismaClient } from "./generated/prisma/client.js";
 import { PrismaPg } from '@prisma/adapter-pg';
 import { cors } from 'hono/cors';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
