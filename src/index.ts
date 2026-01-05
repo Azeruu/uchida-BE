@@ -59,8 +59,8 @@ const allowedOrigins = [
 
 app.use('/*', cors({
   origin: (origin) => {
-    if (!origin) return allowedOrigins[0];
-    if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+    // WAJIB: Izinkan origin spesifik frontend Anda
+    if (origin === FRONTEND_URL || origin === 'https://uchida-fe.vercel.app') {
       return origin;
     }
     return allowedOrigins[0];
@@ -68,6 +68,7 @@ app.use('/*', cors({
   credentials: true,
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
+  exposeHeaders: ['Set-Cookie'],
 }));
 
 // Auth Middleware dengan Typing yang Benar
