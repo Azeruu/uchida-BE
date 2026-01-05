@@ -73,7 +73,15 @@ app.use('/*', cors({
 
 // Auth Middleware dengan Typing yang Benar
 const authMiddleware = async (c: any, next: any) => {
-  const token = getCookie(c, 'auth_token');
+  let token = getCookie(c, 'auth_token');
+
+  // Fallback: Check Authorization Header
+  if (!token) {
+    const authHeader = c.req.header('Authorization');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    }
+  }
 
   if (!token) {
     return c.json({ success: false, message: 'Tidak ada token, silakan login' }, 401);
@@ -90,7 +98,15 @@ const authMiddleware = async (c: any, next: any) => {
 };
 
 const adminMiddleware = async (c: any, next: any) => {
-  const token = getCookie(c, 'auth_token');
+  let token = getCookie(c, 'auth_token');
+
+  // Fallback: Check Authorization Header
+  if (!token) {
+    const authHeader = c.req.header('Authorization');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    }
+  }
 
   if (!token) {
     return c.json({ success: false, message: 'Tidak ada token, silakan login' }, 401);
@@ -139,7 +155,7 @@ app.post('/api/login', async (c) => {
         maxAge: 86400,
         path: '/',
       });
-      return c.json({ success: true, user: { email, role: 'admin' } });
+      return c.json({ success: true, token, user: { email, role: 'admin' } });
     }
 
     // Prisma Check
@@ -153,7 +169,7 @@ app.post('/api/login', async (c) => {
         maxAge: 86400,
         path: '/',
       });
-      return c.json({ success: true, user: { email: user.email, role: user.role } });
+      return c.json({ success: true, token, user: { email: user.email, role: user.role } });
     }
 
     return c.json({ success: false, message: 'Email atau password salah' }, 401);
