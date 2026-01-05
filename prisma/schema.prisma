@@ -37,6 +37,8 @@ model TestResult {
   id               String   @id @default(uuid())
   participantName  String   @map("participant_name")
   participantEmail String   @map("participant_email")
+  participantPendidikan String   @map("participant_pendidikan")
+  participantNoHp String   @map("participant_no_hp")
   totalQuestions   Int      @map("total_questions")
   correctAnswers   Int      @map("correct_answers")
   score            Float

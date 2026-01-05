@@ -263,6 +263,8 @@ app.post('/api/test-results', async (c) => {
       data: {
         participantName: body.participantName,
         participantEmail: body.participantEmail,
+        participantPendidikan: body.participantPendidikan,
+        participantNoHp: body.participantNoHp,
         totalQuestions: Number(body.totalQuestions),
         correctAnswers: Number(body.correctAnswers),
         score: Number(body.score),
