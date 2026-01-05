@@ -133,8 +133,8 @@ app.post('/api/login', async (c) => {
       const token = await sign({ email, role: 'admin' }, JWT_SECRET);
       setCookie(c, 'auth_token', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+        secure: true,
+        sameSite: 'None',
         maxAge: 86400,
         path: '/',
       });
