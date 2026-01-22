@@ -170,41 +170,59 @@ function generatePairs(count = 525) {
 app.get('/api/health', (c) => c.json({ status: 'OK', message: 'Server is running' }));
 
 // --- LOGIN ---
-app.post('/api/login', async (c) => {
+app.post("/api/login", async (c) => {
   try {
     const { email, password } = await c.req.json();
 
     // Admin Hardcoded Check
-    if (email === 'admin.kim@gmail.com' && password === 'kimkantor1') {
-      const token = await sign({ email, role: 'admin' }, JWT_SECRET);
-      setCookie(c, 'auth_token', token, {
+    if (email === "admin.kim@gmail.com" && password === "kimkantor1") {
+      const token = await sign({ email, role: "admin" }, JWT_SECRET);
+
+      // Set cookie (untuk production/same-origin)
+      setCookie(c, "auth_token", token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
         maxAge: 86400,
-        path: '/',
+        path: "/",
       });
-      return c.json({ success: true, token, user: { email, role: 'admin' } });
+
+      // PENTING: Kirim token di body juga untuk fallback
+      return c.json({
+        success: true,
+        token, // Token dikirim di body
+        user: { email, role: "admin" },
+      });
     }
 
     // Prisma Check
     const user = await prisma.user.findUnique({ where: { email } });
-    if (user && await bcrypt.compare(password, user.password)) {
-      const token = await sign({ email: user.email, role: user.role }, JWT_SECRET);
-      setCookie(c, 'auth_token', token, {
+    if (user && (await bcrypt.compare(password, user.password))) {
+      const token = await sign(
+        { email: user.email, role: user.role },
+        JWT_SECRET,
+      );
+      setCookie(c, "auth_token", token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+        secure: false, // Set false untuk localhost HTTP
+        sameSite: "None", // PENTING: Ubah ke 'None' untuk cross-origin
         maxAge: 86400,
-        path: '/',
+        path: "/",
       });
-      return c.json({ success: true, token, user: { email: user.email, role: user.role } });
+      return c.json({
+        success: true,
+        token,
+        user: { email: user.email, role: user.role },
+      });
     }
 
-    return c.json({ success: false, message: 'Email atau password salah' }, 401);
+    return c.json(
+      { success: false, message: "Email atau password salah" },
+      401,
+    );
   } catch (error) {
-    console.error('Login error:', error);
-    return c.json({ success: false, message: 'Internal server error' }, 500);
+    console.error("Login error:", error);
+    return c.json({ success: false, message: "Internal server error" }, 500);
   }
 });
 
