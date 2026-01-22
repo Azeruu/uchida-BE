@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { PrismaClient } from "./generated/prisma/client.js";
 import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
 import { cors } from 'hono/cors';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { sign, verify } from 'hono/jwt';
@@ -19,9 +20,9 @@ if (!globalForPrisma.prisma) {
     throw new Error('DATABASE_URL is not set in environment variables');
   }
 
-  const adapter = new PrismaPg({
+  const adapter = new PrismaPg(new Pool({
     connectionString: databaseUrl,
-  });
+  }));
 
   globalForPrisma.prisma = new PrismaClient({
     adapter,
@@ -197,47 +198,71 @@ app.get('/api/config', async (c) => {
 
   const questionCount = latestQuestion?.totalQuestions ?? 525;
   const durationSeconds = latestQuestion?.durationSeconds ?? 900;
+  const maxIncorrectAnswers = latestQuestion?.maxIncorrectAnswers ?? 7;
+  const minQuestionsPerMinute = latestQuestion?.minQuestionsPerMinute ?? 35;
 
   return c.json({
     success: true,
     data: {
       durationSeconds,
       questionCount,
+      maxIncorrectAnswers,
+      minQuestionsPerMinute,
       pairs: generatePairs(questionCount),
     },
   });
 });
 
 app.post('/api/config', adminMiddleware, async (c) => {
-  const { durationSeconds, questionCount, pairs, regenerate } = await c.req.json();
+  try {
+    const { durationSeconds, questionCount, maxIncorrectAnswers, minQuestionsPerMinute, pairs, regenerate } = await c.req.json();
 
-  const finalCount = Number(questionCount) || 525;
-  const finalDuration = Number(durationSeconds) || 900;
-  
-  let finalPairs = generatePairs(finalCount);
+    const finalCount = Number(questionCount) || 525;
+    const finalDuration = Number(durationSeconds) || 900;
+    
+    // Fix: Handle NaN if conversion fails
+    let finalMaxIncorrect = Number(maxIncorrectAnswers);
+    if (isNaN(finalMaxIncorrect)) finalMaxIncorrect = 7;
+    
+    let finalMinQPM = Number(minQuestionsPerMinute);
+    if (isNaN(finalMinQPM)) finalMinQPM = 35;
+    
+    let finalPairs = generatePairs(finalCount);
 
-  // Jika tidak regenerate dan ada pairs valid dari client
-  if (!regenerate && Array.isArray(pairs) && pairs.length === finalCount) {
-    // Validasi sederhana
-    const isValid = pairs.every((p: any) => p.a >= 3 && p.b >= 3);
-    if (isValid) finalPairs = pairs;
+    // Jika tidak regenerate dan ada pairs valid dari client
+    if (!regenerate && Array.isArray(pairs) && pairs.length === finalCount) {
+      // Validasi sederhana
+      const isValid = pairs.every((p: any) => p.a >= 3 && p.b >= 3);
+      if (isValid) finalPairs = pairs;
+    }
+
+    const newQuestion = await prisma.question.create({
+      data: {
+        totalQuestions: finalCount,
+        durationSeconds: finalDuration,
+      },
+    });
+    // Compat fix: jika Prisma Client belum mengenal kolom baru, gunakan raw SQL untuk update
+    await prisma.$executeRaw`UPDATE "questions" SET "max_incorrect_answers" = ${finalMaxIncorrect}, "min_questions_per_minute" = ${finalMinQPM} WHERE "id" = ${newQuestion.id}`;
+
+    return c.json({
+      success: true,
+      data: {
+        durationSeconds: finalDuration,
+        questionCount: finalCount,
+        maxIncorrectAnswers: finalMaxIncorrect,
+        minQuestionsPerMinute: finalMinQPM,
+        pairs: finalPairs,
+      },
+    });
+  } catch (error: any) {
+    console.error('Save config error:', error);
+    // Return actual error message for debugging
+    return c.json({ 
+      success: false, 
+      error: `Save config failed: ${error?.message || error}` 
+    }, 500);
   }
-
-  await prisma.question.create({
-    data: {
-      totalQuestions: finalCount,
-      durationSeconds: finalDuration,
-    },
-  });
-
-  return c.json({
-    success: true,
-    data: {
-      durationSeconds: finalDuration,
-      questionCount: finalCount,
-      pairs: finalPairs,
-    },
-  });
 });
 
 app.get('/api/questions', adminMiddleware, async (c) => {
@@ -268,6 +293,7 @@ app.post('/api/test-results', async (c) => {
         totalQuestions: Number(body.totalQuestions),
         correctAnswers: Number(body.correctAnswers),
         score: Number(body.score),
+        isPassed: Boolean(body.isPassed), // Save isPassed status
         totalTime: Number(body.totalTime),
         // PERBAIKAN PRISMA 7: Jangan gunakan JSON.stringify jika kolom DB bertipe Json
         answers: body.answers, 
@@ -304,6 +330,19 @@ app.get('/api/test-results/email/:email', async (c) => {
     orderBy: { createdAt: 'desc' },
   });
   return c.json({ success: true, data: results });
+});
+
+app.delete('/api/test-results/:id', adminMiddleware, async (c) => {
+  try {
+    const id = c.req.param('id');
+    await prisma.testResult.delete({
+      where: { id },
+    });
+    return c.json({ success: true, message: 'Test result deleted successfully' });
+  } catch (error) {
+    console.error('Delete result error:', error);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
 });
 
 // --- STATISTICS (HEAVILY OPTIMIZED) ---

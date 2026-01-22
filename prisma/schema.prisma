@@ -28,6 +28,8 @@ model Question {
   id              String   @id @default(uuid())
   totalQuestions  Int      @map("total_questions")
   durationSeconds Int      @map("duration_seconds")
+  maxIncorrectAnswers Int @default(7) @map("max_incorrect_answers")
+  minQuestionsPerMinute Int @default(35) @map("min_questions_per_minute")
   createdAt       DateTime @default(now()) @map("created_at")
 
   @@map("questions")
@@ -42,6 +44,7 @@ model TestResult {
   totalQuestions   Int      @map("total_questions")
   correctAnswers   Int      @map("correct_answers")
   score            Float
+  isPassed         Boolean  @default(false) @map("is_passed")
   totalTime        Int      @map("total_time") // in seconds
   answers          Json   // JSON string
   createdAt        DateTime @default(now()) @map("created_at")
