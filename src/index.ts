@@ -82,6 +82,11 @@ const authMiddleware = async (c: any, next: any) => {
       token = authHeader.substring(7);
     }
   }
+  // Fallback: Query parameter ?token=...
+  if (!token) {
+    const q = c.req.query('token');
+    if (q) token = q;
+  }
 
   if (!token) {
     return c.json({ success: false, message: 'Tidak ada token, silakan login' }, 401);
@@ -106,6 +111,11 @@ const adminMiddleware = async (c: any, next: any) => {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7);
     }
+  }
+  // Fallback: Query parameter ?token=...
+  if (!token) {
+    const q = c.req.query('token');
+    if (q) token = q;
   }
 
   if (!token) {
