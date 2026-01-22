@@ -60,11 +60,10 @@ const allowedOrigins = [
 
 app.use('/*', cors({
   origin: (origin) => {
-    // WAJIB: Izinkan origin spesifik frontend Anda
-    if (origin === FRONTEND_URL || origin === 'https://uchida-fe.vercel.app') {
-      return origin;
-    }
-    return allowedOrigins[0];
+    // Izinkan origin yang ada di whitelist (localhost, FRONTEND_URL, dan ALLOWED_ORIGINS)
+    if (!origin) return FRONTEND_URL;
+    if (allowedOrigins.includes(origin)) return origin;
+    return FRONTEND_URL;
   },
   credentials: true,
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -151,8 +150,8 @@ app.post('/api/login', async (c) => {
       const token = await sign({ email, role: 'admin' }, JWT_SECRET);
       setCookie(c, 'auth_token', token, {
         httpOnly: true,
-        secure: true,
-        sameSite: 'None',
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
         maxAge: 86400,
         path: '/',
       });
