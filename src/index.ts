@@ -42,7 +42,7 @@ const app = new Hono<{ Variables: Variables }>();
 
 // ============ CONFIG ============
 const PORT = Number(process.env.PORT) || 8080;
-const JWT_SECRET = process.env.JWT_SECRET || 'uchida-jwt-secret-key-2024';
+const JWT_SECRET = process.env.JWT_SECRET || 'uchida-jwt-secret-key-2026';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://uchida-fe.vercel.app';
 const EXTRA_ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
