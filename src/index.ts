@@ -93,9 +93,18 @@ const authMiddleware = async (c: any, next: any) => {
   }
 
   try {
-    const decoded = await verify(token, JWT_SECRET);
-    // Hono secara otomatis tahu tipe 'user' karena definisi Generic di atas
-    c.set('user', decoded);
+    let decoded;
+    const candidates = [JWT_SECRET, 'uchida-jwt-secret-key-2026', 'uchida-jwt-secret-key-2024'];
+    for (const secret of candidates) {
+      try {
+        decoded = await verify(token, secret);
+        if (decoded) break;
+      } catch {}
+    }
+    if (!decoded) {
+      return c.json({ success: false, message: 'Token tidak valid atau expired' }, 401);
+    }
+    c.set('user', decoded as any);
     await next();
   } catch (error) {
     return c.json({ success: false, message: 'Token tidak valid atau expired' }, 401);
@@ -123,11 +132,21 @@ const adminMiddleware = async (c: any, next: any) => {
   }
 
   try {
-    const decoded = await verify(token, JWT_SECRET);
-    if (decoded.role !== 'admin') {
+    let decoded;
+    const candidates = [JWT_SECRET, 'uchida-jwt-secret-key-2026', 'uchida-jwt-secret-key-2024'];
+    for (const secret of candidates) {
+      try {
+        decoded = await verify(token, secret);
+        if (decoded) break;
+      } catch {}
+    }
+    if (!decoded) {
+      return c.json({ success: false, message: 'Token tidak valid atau expired' }, 401);
+    }
+    if ((decoded as any).role !== 'admin') {
       return c.json({ success: false, message: 'Akses ditolak.' }, 403);
     }
-    c.set('user', decoded);
+    c.set('user', decoded as any);
     await next();
   } catch (error) {
     return c.json({ success: false, message: 'Token tidak valid' }, 401);
