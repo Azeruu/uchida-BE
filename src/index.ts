@@ -58,18 +58,27 @@ const allowedOrigins = [
 
 // ============ MIDDLEWARE ============
 
-app.use('/*', cors({
-  origin: (origin) => {
-    // Izinkan origin yang ada di whitelist (localhost, FRONTEND_URL, dan ALLOWED_ORIGINS)
-    if (!origin) return FRONTEND_URL;
-    if (allowedOrigins.includes(origin)) return origin;
-    return FRONTEND_URL;
-  },
-  credentials: true,
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
-  exposeHeaders: ['Set-Cookie'],
-}));
+app.use(
+  "/*",
+  cors({
+    origin: (origin) => {
+      console.log("🌐 Request from origin:", origin); // DEBUG
+
+      if (!origin) return FRONTEND_URL;
+      if (allowedOrigins.includes(origin)) {
+        console.log("✅ Origin allowed:", origin);
+        return origin;
+      }
+
+      console.log("⚠️ Origin not in whitelist, using default:", FRONTEND_URL);
+      return FRONTEND_URL;
+    },
+    credentials: true,
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization"],
+    exposeHeaders: ["Set-Cookie"],
+  }),
+);
 
 // Auth Middleware dengan Typing yang Benar
 const authMiddleware = async (c: any, next: any) => {
@@ -170,57 +179,76 @@ function generatePairs(count = 525) {
 app.get('/api/health', (c) => c.json({ status: 'OK', message: 'Server is running' }));
 
 // --- LOGIN ---
-app.post('/api/login', async (c) => {
+app.post("/api/login", async (c) => {
   try {
     const { email, password } = await c.req.json();
+    console.log("📥 Login request:", { email }); // Jangan log password!
 
     // Admin Hardcoded Check
-    if (email === 'admin.kim@gmail.com' && password === 'kimkantor1') {
-      const token = await sign({ email, role: 'admin' }, JWT_SECRET);
-      
-      // OPSIONAL: Set cookie sebagai backup (tapi tidak wajib)
-      setCookie(c, 'auth_token', token, {
+    if (email === "admin.kim@gmail.com" && password === "kimkantor1") {
+      const token = await sign({ email, role: "admin" }, JWT_SECRET);
+
+      console.log("✅ Admin login successful");
+      console.log("🔑 Generated token:", token.substring(0, 30) + "...");
+
+      // Set cookie
+      setCookie(c, "auth_token", token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
         maxAge: 86400,
-        path: '/',
+        path: "/",
       });
-      
-      // PRIMARY: Return token di body untuk localStorage
-      return c.json({ 
-        success: true, 
-        token, 
-        user: { email, role: 'admin' } 
-      });
+
+      const responseData = {
+        success: true,
+        token,
+        user: { email, role: "admin" },
+      };
+
+      console.log("📤 Sending response:", responseData);
+
+      return c.json(responseData);
     }
 
     // Prisma Check
     const user = await prisma.user.findUnique({ where: { email } });
-    if (user && await bcrypt.compare(password, user.password)) {
-      const token = await sign({ email: user.email, role: user.role }, JWT_SECRET);
-      
-      // OPSIONAL: Set cookie
-      setCookie(c, 'auth_token', token, {
+    if (user && (await bcrypt.compare(password, user.password))) {
+      const token = await sign(
+        { email: user.email, role: user.role },
+        JWT_SECRET,
+      );
+
+      console.log("✅ User login successful");
+      console.log("🔑 Generated token:", token.substring(0, 30) + "...");
+
+      setCookie(c, "auth_token", token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
         maxAge: 86400,
-        path: '/',
+        path: "/",
       });
-      
-      // PRIMARY: Return token
-      return c.json({ 
-        success: true, 
-        token, 
-        user: { email: user.email, role: user.role } 
-      });
+
+      const responseData = {
+        success: true,
+        token,
+        user: { email: user.email, role: user.role },
+      };
+
+      console.log("📤 Sending response:", responseData);
+
+      return c.json(responseData);
     }
 
-    return c.json({ success: false, message: 'Email atau password salah' }, 401);
+    console.log("❌ Invalid credentials");
+    return c.json(
+      { success: false, message: "Email atau password salah" },
+      401,
+    );
   } catch (error) {
-    console.error('Login error:', error);
-    return c.json({ success: false, message: 'Internal server error' }, 500);
+    console.error("💥 Login error:", error);
+    return c.json({ success: false, message: "Internal server error" }, 500);
   }
 });
 
