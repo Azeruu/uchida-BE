@@ -1,119 +1,90 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
-import { PrismaClient } from "./generated/prisma/client.js";
-import { PrismaPg } from "@prisma/adapter-pg";
-import { Pool } from "pg";
 import { cors } from "hono/cors";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { sign, verify } from "hono/jwt";
-import bcrypt from "bcryptjs";
 import "dotenv/config";
 
-// ============ PRISMA SETUP ============
-const globalForPrisma = global as unknown as {
-  prisma: PrismaClient | undefined;
-};
-
-if (!globalForPrisma.prisma) {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error("DATABASE_URL is not set in environment variables");
-  }
-
-  const adapter = new PrismaPg(
-    new Pool({
-      connectionString: databaseUrl,
-    }),
-  );
-
-  globalForPrisma.prisma = new PrismaClient({
-    adapter,
-  });
-}
-
-const prisma = globalForPrisma.prisma;
-
 // ============ CONFIG ============
-const PORT = Number(process.env.PORT) || 8080;
-const JWT_SECRET = process.env.JWT_SECRET || "uchida-jwt-secret-key-2026";
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 const NODE_ENV = process.env.NODE_ENV || "development";
+const PORT = Number(process.env.PORT) || 8080;
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+
+// PENTING: JWT Secret harus konsisten dan STRONG
+// Gunakan secret yang sama di semua environment
+const JWT_SECRET =
+  process.env.JWT_SECRET ||
+  "uchida-jwt-secret-key-2026-super-secret-must-be-same";
+
+console.log("═══════════════════════════════════════════");
+console.log("🔧 SERVER CONFIGURATION");
+console.log("═══════════════════════════════════════════");
+console.log("NODE_ENV:", NODE_ENV);
+console.log("PORT:", PORT);
+console.log("FRONTEND_URL:", FRONTEND_URL);
+console.log("JWT_SECRET configured:", JWT_SECRET ? "✅ YES" : "❌ NO");
+console.log("JWT_SECRET length:", JWT_SECRET.length, "chars");
+console.log("═══════════════════════════════════════════\n");
 
 // Parse allowed origins
 const EXTRA_ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
   .map((o) => o.trim())
-  .filter(Boolean);
+  .filter((o) => o.length > 0);
 
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
+  "http://127.0.0.1:5173",
   FRONTEND_URL,
   ...EXTRA_ALLOWED_ORIGINS,
 ];
 
-console.log("🔧 CORS Configuration:");
-console.log("   NODE_ENV:", NODE_ENV);
-console.log("   FRONTEND_URL:", FRONTEND_URL);
-console.log("   Allowed Origins:", allowedOrigins);
+console.log("Allowed Origins:");
+allowedOrigins.forEach((o) => console.log(`  - ${o}`));
+console.log("");
 
 // ============ TYPE DEFINITIONS ============
 type Variables = {
-  user: {
+  user?: {
     email: string;
     role: string;
+    iat?: number;
+    exp?: number;
   };
 };
 
 const app = new Hono<{ Variables: Variables }>();
 
-// ============ MIDDLEWARE ============
-
-// CORS Configuration - PERBAIKAN UTAMA
+// ============ CORS MIDDLEWARE ============
 app.use(
   "/*",
   cors({
     origin: (origin:any) => {
-      // Debug log
-      console.log("🌐 CORS Check - Origin:", origin);
-
-      // Jika tidak ada origin (mobile app atau desktop), izinkan
       if (!origin) {
-        console.log("✅ No origin (mobile/desktop), allowing");
-        return true; // Allow all untuk non-browser requests
+        console.log("🌐 [CORS] No origin (non-browser)");
+        return true;
       }
 
-      // Check if origin adalah localhost development
-      if (origin.includes("localhost") || origin.includes("127.0.0.1")) {
-        console.log("✅ Localhost/Development origin allowed:", origin);
-        return origin;
-      }
+      const isAllowed = allowedOrigins.some(
+        (allowed) =>
+          origin.toLowerCase().trim() === allowed.toLowerCase().trim(),
+      );
 
-      // Check whitelist
-      if (allowedOrigins.includes(origin)) {
-        console.log("✅ Origin in whitelist:", origin);
-        return origin;
-      }
-
-      // Production check: allow exact match
-      if (
-        NODE_ENV === "production" &&
-        allowedOrigins.some((o) => origin === o)
-      ) {
-        console.log("✅ Production origin allowed:", origin);
-        return origin;
-      }
-
-      console.log("⚠️ Origin not allowed:", origin);
-      return false; // JANGAN return origin jika tidak disetujui
+      console.log(
+        `🌐 [CORS] Origin: ${origin} → ${isAllowed ? "✅ ALLOWED" : "❌ REJECTED"}`,
+      );
+      return isAllowed ? origin : false;
     },
     credentials: true,
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
     allowHeaders: [
       "Content-Type",
       "Authorization",
       "Accept",
       "Origin",
+      "Access-Control-Request-Method",
+      "Access-Control-Request-Headers",
       "X-Requested-With",
     ],
     exposeHeaders: ["Set-Cookie", "Content-Type"],
@@ -121,55 +92,42 @@ app.use(
   }),
 );
 
-// Add security headers
+// ============ SECURITY HEADERS ============
 app.use("/*", async (c, next) => {
   c.header("X-Content-Type-Options", "nosniff");
-  c.header("X-Frame-Options", "DENY");
+  c.header("X-Frame-Options", "SAMEORIGIN");
+  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
   await next();
 });
 
-// ============ AUTH MIDDLEWARE ============
+// ============ REQUEST LOGGING ============
+app.use("/*", async (c, next) => {
+  const start = Date.now();
+  const method = c.req.method;
+  const path = c.req.path;
 
-// Token extractor - coba cookie dulu, kemudian header
-const getToken = (c: any): string | null => {
-  // 1. Coba dari cookie
-  let token = getCookie(c, "auth_token");
-  if (token) {
-    console.log("🍪 Token dari cookie");
-    return token;
-  }
+  await next();
 
-  // 2. Coba dari Authorization header
-  const authHeader = c.req.header("Authorization");
-  if (authHeader?.startsWith("Bearer ")) {
-    token = authHeader.substring(7);
-    console.log("🔑 Token dari Authorization header");
-    return token ?? null;
-  }
+  const duration = Date.now() - start;
+  const status = c.res.status;
+  console.log(
+    `${status === 200 ? "✅" : "❌"} ${method.padEnd(6)} ${path.padEnd(20)} [${duration}ms]`,
+  );
+});
 
-  // 3. Coba dari query parameter (fallback saja)
-  const q = c.req.query("token");
-  if (q) {
-    console.log("❓ Token dari query parameter");
-    return q;
-  }
-
-  return null;
-};
-
-// Verify token dengan multiple secrets untuk backward compatibility
-const verifyToken = async (token: string): Promise<any> => {
-  const candidates = [
-    JWT_SECRET,
-    "uchida-jwt-secret-key-2026",
-    "uchida-jwt-secret-key-2024",
+// ============ HELPER: TOKEN VERIFICATION ============
+const verifyTokens = async (token: string): Promise<any> => {
+  const secrets = [
+    JWT_SECRET, // Primary secret
+    "uchida-jwt-secret-key-2026", // Fallback 1
+    "uchida-jwt-secret-key-2024", // Fallback 2
   ];
 
-  for (const secret of candidates) {
+  for (let i = 0; i < secrets.length; i++) {
     try {
-      const decoded = await verify(token, secret);
+      const decoded = await verify(token, secrets[i]);
       if (decoded) {
-        console.log("✅ Token verified with secret");
+        console.log(`   🔑 Token verified with secret #${i + 1}`);
         return decoded;
       }
     } catch (e) {
@@ -177,344 +135,220 @@ const verifyToken = async (token: string): Promise<any> => {
     }
   }
 
-  throw new Error("Token verification failed");
+  throw new Error("Token verification failed with all secrets");
 };
 
+// ============ HELPER: GET TOKEN FROM REQUEST ============
+const getTokenFromRequest = (c: any): string | null => {
+  // 1. Try from Authorization header (Bearer token)
+  const authHeader = c.req.header("Authorization");
+  if (authHeader?.startsWith("Bearer ")) {
+    const token = authHeader.substring(7);
+    console.log("   📌 Token from Authorization header");
+    return token;
+  }
+
+  // 2. Try from cookie
+  const cookieToken = getCookie(c, "auth_token");
+  if (cookieToken) {
+    console.log("   🍪 Token from cookie");
+    return cookieToken;
+  }
+
+  // 3. Try from query parameter
+  const queryToken = c.req.query("token");
+  if (queryToken) {
+    console.log("   ❓ Token from query parameter");
+    return queryToken;
+  }
+
+  return null;
+};
+
+// ============ AUTH MIDDLEWARE ============
 const authMiddleware = async (c: any, next: any) => {
-  const token = getToken(c);
+  console.log("🔐 [AUTH] Checking authentication...");
+
+  const token = getTokenFromRequest(c);
 
   if (!token) {
-    console.log("❌ No token found");
-    return c.json(
-      { success: false, message: "Tidak ada token, silakan login" },
-      401,
-    );
+    console.log("   ❌ No token found");
+    return c.json({ success: false, message: "No token, please login" }, 401);
   }
 
   try {
-    const decoded = await verifyToken(token);
-    c.set("user", decoded);
-    await next();
-  } catch (error) {
-    console.log("❌ Token invalid/expired:", error);
-    return c.json(
-      { success: false, message: "Token tidak valid atau expired" },
-      401,
-    );
-  }
-};
+    console.log("   ✓ Token found, verifying...");
+    const decoded = await verifyTokens(token);
 
-const adminMiddleware = async (c: any, next: any) => {
-  const token = getToken(c);
-
-  if (!token) {
-    console.log("❌ No token for admin");
-    return c.json(
-      { success: false, message: "Tidak ada token, silakan login" },
-      401,
-    );
-  }
-
-  try {
-    const decoded = await verifyToken(token);
-
-    if (decoded.role !== "admin") {
-      console.log("❌ User bukan admin:", decoded.role);
-      return c.json({ success: false, message: "Akses ditolak." }, 403);
+    if (!decoded) {
+      console.log("   ❌ Token verification returned null");
+      return c.json({ success: false, message: "Invalid token" }, 401);
     }
 
+    console.log(
+      `   ✅ Token valid. User: ${decoded.email}, Role: ${decoded.role}`,
+    );
     c.set("user", decoded);
     await next();
-  } catch (error) {
-    console.log("❌ Admin auth failed:", error);
-    return c.json({ success: false, message: "Token tidak valid" }, 401);
+  } catch (error: any) {
+    console.log(`   ❌ Token verification failed: ${error.message}`);
+    return c.json({ success: false, message: "Token invalid or expired" }, 401);
   }
 };
-
-// ============ HELPER FUNCTIONS ============
-function generatePairs(count = 525) {
-  const result = [];
-  for (let i = 0; i < count; i++) {
-    result.push({
-      a: Math.floor(Math.random() * 7) + 3,
-      b: Math.floor(Math.random() * 7) + 3,
-    });
-  }
-  return result;
-}
 
 // ============ ROUTES ============
 
-app.get("/api/health", (c) =>
-  c.json({ status: "OK", message: "Server is running" }),
-);
+// Health check
+app.get("/api/health", (c) => {
+  return c.json({
+    status: "OK",
+    timestamp: new Date().toISOString(),
+    environment: NODE_ENV,
+  });
+});
 
-// --- LOGIN ---
+// CORS test
+app.get("/api/cors-test", (c) => {
+  const origin = c.req.header("origin");
+  return c.json({
+    success: true,
+    message: "CORS is working",
+    yourOrigin: origin || "no-origin",
+  });
+});
+
+// JWT test - untuk generate token manual
+app.post("/api/test-jwt", async (c) => {
+  try {
+    console.log("🧪 [TEST JWT] Generating test token...");
+
+    const testUser = {
+      email: "test@example.com",
+      role: "admin",
+    };
+
+    const token = await sign(testUser, JWT_SECRET);
+
+    console.log(`   ✅ Token generated: ${token.substring(0, 50)}...`);
+
+    return c.json({
+      success: true,
+      message: "Test token generated",
+      token,
+      secret: JWT_SECRET,
+      user: testUser,
+      instructions:
+        "Copy token and test it with /me endpoint using Authorization: Bearer <token>",
+    });
+  } catch (error: any) {
+    console.log(`   ❌ Error: ${error.message}`);
+    return c.json({ success: false, error: error.message }, 500);
+  }
+});
+
+// LOGIN - PERBAIKAN UTAMA
 app.post("/api/login", async (c) => {
   try {
-    const { email, password } = await c.req.json();
-    console.log("📥 Login request:", { email });
+    console.log("🔐 [LOGIN] Processing login request...");
 
-    // Admin hardcoded
+    const body = await c.req.json();
+    const { email, password } = body;
+
+    console.log(`   📧 Email: ${email}`);
+    console.log(`   🔑 Password: ${password ? "***" : "EMPTY"}`);
+
+    // Hardcoded admin check
     if (email === "admin.kim@gmail.com" && password === "kimkantor1") {
-      const token = await sign({ email, role: "admin" }, JWT_SECRET);
-      console.log("✅ Admin login successful");
+      console.log("   ✅ Credentials match admin");
 
-      // Set HTTP-only cookie (production-safe)
-      setCookie(c, "auth_token", token, {
-        httpOnly: true,
-        secure: NODE_ENV === "production", // HTTPS only in production
-        sameSite: NODE_ENV === "production" ? "None" : "Lax",
-        maxAge: 86400, // 24 hours
-        path: "/",
-        domain: NODE_ENV === "production" ? undefined : undefined, // Jangan set domain untuk localhost
-      });
-
-      return c.json({
-        success: true,
-        token, // Kirim token juga di response untuk localStorage fallback
-        user: { email, role: "admin" },
-      });
-    }
-
-    // Database check
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (user && (await bcrypt.compare(password, user.password))) {
+      // Generate JWT token dengan PRIMARY secret
       const token = await sign(
-        { email: user.email, role: user.role },
-        JWT_SECRET,
+        {
+          email: "admin.kim@gmail.com",
+          role: "admin",
+        },
+        JWT_SECRET, // PENTING: gunakan primary secret untuk sign
       );
-      console.log("✅ User login successful");
 
+      console.log(`   🔑 Token generated: ${token.substring(0, 50)}...`);
+      console.log(`   🔑 Token length: ${token.length}`);
+
+      // Set HTTP-only cookie
       setCookie(c, "auth_token", token, {
         httpOnly: true,
         secure: NODE_ENV === "production",
         sameSite: NODE_ENV === "production" ? "None" : "Lax",
-        maxAge: 86400,
+        maxAge: 86400, // 24 hours
         path: "/",
       });
 
-      return c.json({
+      console.log("   🍪 HTTP-only cookie set");
+
+      const response = {
         success: true,
-        token,
-        user: { email: user.email, role: user.role },
-      });
+        message: "Login successful",
+        token, // Kirim token di response untuk localStorage
+        user: {
+          email: "admin.kim@gmail.com",
+          role: "admin",
+        },
+      };
+
+      console.log("   📤 Sending response...");
+      return c.json(response, 200);
     }
 
-    console.log("❌ Invalid credentials");
+    console.log("   ❌ Invalid credentials");
     return c.json(
-      { success: false, message: "Email atau password salah" },
+      { success: false, message: "Invalid email or password" },
       401,
     );
-  } catch (error) {
-    console.error("💥 Login error:", error);
-    return c.json({ success: false, message: "Internal server error" }, 500);
-  }
-});
-
-// --- LOGOUT ---
-app.post("/api/logout", (c) => {
-  deleteCookie(c, "auth_token", { path: "/" });
-  return c.json({ success: true, message: "Logout berhasil" });
-});
-
-// --- ME ENDPOINT ---
-app.get("/api/me", authMiddleware, (c) => {
-  const user = c.get("user");
-  return c.json({ success: true, user });
-});
-
-// --- CONFIG ---
-app.get("/api/config", async (c) => {
-  const latestQuestion = await prisma.question.findFirst({
-    orderBy: { createdAt: "desc" },
-  });
-
-  const questionCount = latestQuestion?.totalQuestions ?? 525;
-  const durationSeconds = latestQuestion?.durationSeconds ?? 900;
-  const maxIncorrectAnswers = latestQuestion?.maxIncorrectAnswers ?? 7;
-  const minQuestionsPerMinute = latestQuestion?.minQuestionsPerMinute ?? 35;
-
-  return c.json({
-    success: true,
-    data: {
-      durationSeconds,
-      questionCount,
-      maxIncorrectAnswers,
-      minQuestionsPerMinute,
-      pairs: generatePairs(questionCount),
-    },
-  });
-});
-
-app.post("/api/config", adminMiddleware, async (c) => {
-  try {
-    const {
-      durationSeconds,
-      questionCount,
-      maxIncorrectAnswers,
-      minQuestionsPerMinute,
-      pairs,
-      regenerate,
-    } = await c.req.json();
-
-    const finalCount = Number(questionCount) || 525;
-    const finalDuration = Number(durationSeconds) || 900;
-
-    let finalMaxIncorrect = Number(maxIncorrectAnswers);
-    if (isNaN(finalMaxIncorrect)) finalMaxIncorrect = 7;
-
-    let finalMinQPM = Number(minQuestionsPerMinute);
-    if (isNaN(finalMinQPM)) finalMinQPM = 35;
-
-    let finalPairs = generatePairs(finalCount);
-
-    if (!regenerate && Array.isArray(pairs) && pairs.length === finalCount) {
-      const isValid = pairs.every((p: any) => p.a >= 3 && p.b >= 3);
-      if (isValid) finalPairs = pairs;
-    }
-
-    const newQuestion = await prisma.question.create({
-      data: {
-        totalQuestions: finalCount,
-        durationSeconds: finalDuration,
-      },
-    });
-
-    await prisma.$executeRaw`UPDATE "questions" SET "max_incorrect_answers" = ${finalMaxIncorrect}, "min_questions_per_minute" = ${finalMinQPM} WHERE "id" = ${newQuestion.id}`;
-
-    return c.json({
-      success: true,
-      data: {
-        durationSeconds: finalDuration,
-        questionCount: finalCount,
-        maxIncorrectAnswers: finalMaxIncorrect,
-        minQuestionsPerMinute: finalMinQPM,
-        pairs: finalPairs,
-      },
-    });
   } catch (error: any) {
-    console.error("Save config error:", error);
+    console.log(`   💥 Error: ${error.message}`);
     return c.json(
-      {
-        success: false,
-        error: `Save config failed: ${error?.message || error}`,
-      },
+      { success: false, message: "Server error", error: error.message },
       500,
     );
   }
 });
 
-app.get("/api/questions", adminMiddleware, async (c) => {
-  const questions = await prisma.question.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 50,
-  });
-  return c.json({ success: true, data: questions });
+// LOGOUT
+app.post("/api/logout", (c) => {
+  console.log("🚪 [LOGOUT] Processing logout...");
+  deleteCookie(c, "auth_token", { path: "/" });
+  return c.json({ success: true, message: "Logout successful" });
 });
 
-// --- TEST RESULTS ---
-app.post("/api/test-results", async (c) => {
-  try {
-    const body = await c.req.json();
-
-    if (!body.participantName || !body.participantEmail) {
-      return c.json({ success: false, error: "Name and Email required" }, 400);
-    }
-
-    const testResult = await prisma.testResult.create({
-      data: {
-        participantName: body.participantName,
-        participantEmail: body.participantEmail,
-        participantPendidikan: body.participantPendidikan,
-        participantNoHp: body.participantNoHp,
-        totalQuestions: Number(body.totalQuestions),
-        correctAnswers: Number(body.correctAnswers),
-        score: Number(body.score),
-        isPassed: Boolean(body.isPassed),
-        totalTime: Number(body.totalTime),
-        answers: body.answers,
-      },
-    });
-
-    return c.json({ success: true, data: testResult }, 201);
-  } catch (error) {
-    console.error("Create result error:", error);
-    return c.json({ success: false, error: "Internal server error" }, 500);
-  }
-});
-
-app.get("/api/test-results", async (c) => {
-  const results = await prisma.testResult.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 100,
-  });
-  return c.json({ success: true, data: results });
-});
-
-app.get("/api/test-results/:id", async (c) => {
-  const id = c.req.param("id");
-  const result = await prisma.testResult.findUnique({ where: { id } });
-
-  if (!result) return c.json({ success: false, error: "Not found" }, 404);
-  return c.json({ success: true, data: result });
-});
-
-app.get("/api/test-results/email/:email", async (c) => {
-  const email = c.req.param("email");
-  const results = await prisma.testResult.findMany({
-    where: { participantEmail: email },
-    orderBy: { createdAt: "desc" },
-  });
-  return c.json({ success: true, data: results });
-});
-
-app.delete("/api/test-results/:id", adminMiddleware, async (c) => {
-  try {
-    const id = c.req.param("id");
-    await prisma.testResult.delete({ where: { id } });
-    return c.json({
-      success: true,
-      message: "Test result deleted successfully",
-    });
-  } catch (error) {
-    console.error("Delete result error:", error);
-    return c.json({ success: false, error: "Internal server error" }, 500);
-  }
-});
-
-// --- STATISTICS ---
-app.get("/api/statistics", async (c) => {
-  try {
-    const aggregations = await prisma.testResult.aggregate({
-      _count: { id: true },
-      _avg: { score: true, totalTime: true },
-      _max: { score: true },
-      _min: { score: true },
-    });
-
-    return c.json({
-      success: true,
-      data: {
-        totalTests: aggregations._count.id,
-        averageScore: aggregations._avg.score?.toFixed(2) || 0,
-        averageTime: Math.round(aggregations._avg.totalTime || 0),
-        highestScore: aggregations._max.score || 0,
-        lowestScore: aggregations._min.score || 0,
-      },
-    });
-  } catch (error) {
-    console.error("Stats error:", error);
-    return c.json({ success: false, error: "Internal server error" }, 500);
-  }
+// ME - Get current user
+app.get("/api/me", authMiddleware, (c) => {
+  const user = c.get("user");
+  console.log("📋 [ME] Returning user info");
+  return c.json({ success: true, user });
 });
 
 // ============ ERROR HANDLING ============
-app.notFound((c) => c.json({ success: false, message: "Not Found" }, 404));
+app.notFound((c) => {
+  const path = c.req.path;
+  console.log(`⚠️  [404] Not found: ${path}`);
+  return c.json({ success: false, message: "Not Found" }, 404);
+});
+
 app.onError((err, c) => {
-  console.error("Global error:", err);
+  console.error(`💥 [ERROR] ${err.message}`);
   return c.json({ success: false, message: "Internal Server Error" }, 500);
 });
 
-console.log(`🚀 Server starting on port ${PORT}`);
+// ============ START SERVER ============
+console.log(`\n🚀 Server starting on http://localhost:${PORT}`);
+console.log(`📍 Try these endpoints:`);
+console.log(`   GET  http://localhost:${PORT}/api/health`);
+console.log(`   GET  http://localhost:${PORT}/api/cors-test`);
+console.log(`   POST http://localhost:${PORT}/api/login`);
+console.log(
+  `   GET  http://localhost:${PORT}/api/me (with Authorization header)`,
+);
+console.log(
+  `   POST http://localhost:${PORT}/api/test-jwt (debug JWT token)\n`,
+);
+
 export default { port: PORT, fetch: app.fetch };
