@@ -82,15 +82,15 @@ app.use(
 
       if (isAllowed) {
         console.log(`✅ CORS: ${origin}`);
-        return origin; // PENTING: return origin untuk credentials
+        return origin;
       }
 
       console.log(`❌ CORS: ${origin}`);
       return false;
     },
-    credentials: true, // PENTING: Allow credentials (cookies)
+    credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Accept", "Origin"],
+    allowHeaders: ["Content-Type", "Accept", "Origin", "Authorization"], // 🔴 ADD Authorization
     exposeHeaders: ["Set-Cookie"],
     maxAge: 86400,
   }),
