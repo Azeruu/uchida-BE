@@ -65,16 +65,8 @@ app.use(
         console.log("🌐 [CORS] No origin (non-browser)");
         return true;
       }
-
-      const isAllowed = allowedOrigins.some(
-        (allowed) =>
-          origin.toLowerCase().trim() === allowed.toLowerCase().trim(),
-      );
-
-      console.log(
-        `🌐 [CORS] Origin: ${origin} → ${isAllowed ? "✅ ALLOWED" : "❌ REJECTED"}`,
-      );
-      return isAllowed ? origin : false;
+      console.log(`🌐 [CORS] Origin: ${origin} → ✅ ALLOWED`);
+      return origin;
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
