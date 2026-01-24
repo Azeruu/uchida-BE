@@ -114,28 +114,62 @@ app.use("/*", async (c, next) => {
   );
 });
 
-// ============ AUTH MIDDLEWARE - COOKIE ONLY ============
+// ============ AUTH MIDDLEWARE - COOKIE + HEADER ============
 const authMiddleware = async (c: any, next: any) => {
-  const token = getCookie(c, "auth_token");
+  console.log("\n🔐 [AUTH] Checking...");
+
+  // 1. Try cookie first
+  let token = getCookie(c, "auth_token");
+  if (token) {
+    console.log(`   🍪 Token from cookie`);
+  }
+
+  // 2. Try Authorization header
+  if (!token) {
+    const authHeader = c.req.header("Authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      token = authHeader.substring(7);
+      console.log(`   🔑 Token from Authorization header`);
+    }
+  }
 
   if (!token) {
+    console.log(`   ❌ No token found`);
     return c.json({ success: false, message: "Not authenticated" }, 401);
   }
 
   try {
     const decoded = await verify(token, JWT_SECRET);
+    console.log(`   ✅ Token valid, user: ${decoded.email}`);
     c.set("user", decoded as any);
     await next();
   } catch (error: any) {
+    console.log(`   ❌ Token verification failed: ${error.message}`);
     return c.json({ success: false, message: "Invalid token" }, 401);
   }
 };
 
 // ============ ADMIN MIDDLEWARE ============
 const adminMiddleware = async (c: any, next: any) => {
-  const token = getCookie(c, "auth_token");
+  console.log("\n🔐 [ADMIN AUTH] Checking...");
+
+  // 1. Try cookie first
+  let token = getCookie(c, "auth_token");
+  if (token) {
+    console.log(`   🍪 Token from cookie`);
+  }
+
+  // 2. Try Authorization header
+  if (!token) {
+    const authHeader = c.req.header("Authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      token = authHeader.substring(7);
+      console.log(`   🔑 Token from Authorization header`);
+    }
+  }
 
   if (!token) {
+    console.log(`   ❌ No token found`);
     return c.json({ success: false, message: "Not authenticated" }, 401);
   }
 
@@ -143,12 +177,15 @@ const adminMiddleware = async (c: any, next: any) => {
     const decoded = await verify(token, JWT_SECRET);
 
     if (decoded.role !== "admin") {
+      console.log(`   ❌ User not admin: ${decoded.role}`);
       return c.json({ success: false, message: "Access denied" }, 403);
     }
 
+    console.log(`   ✅ Admin user: ${decoded.email}`);
     c.set("user", decoded as any);
     await next();
-  } catch (error) {
+  } catch (error: any) {
+    console.log(`   ❌ Token verification failed: ${error.message}`);
     return c.json({ success: false, message: "Invalid token" }, 401);
   }
 };
