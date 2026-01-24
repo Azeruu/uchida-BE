@@ -82,13 +82,13 @@ app.use(
 
       if (isAllowed) {
         console.log(`✅ CORS: ${origin}`);
-        return origin;
+        return origin; // PENTING: return origin untuk credentials
       }
 
       console.log(`❌ CORS: ${origin}`);
       return false;
     },
-    credentials: true, // PENTING: Allow cookies
+    credentials: true, // PENTING: Allow credentials (cookies)
     allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allowHeaders: ["Content-Type", "Accept", "Origin"],
     exposeHeaders: ["Set-Cookie"],
@@ -193,13 +193,13 @@ app.post("/api/login", async (c) => {
 
       setCookie(c, "auth_token", token, {
         httpOnly: true,
-        secure: NODE_ENV === "production",
-        sameSite: NODE_ENV === "production" ? "None" : "Lax",
+        secure: true, // PENTING: Always true untuk cross-domain
+        sameSite: "None", // PENTING: Allow cross-domain cookie
         maxAge: 86400,
         path: "/",
       });
 
-      console.log(`   🍪 Cookie set`);
+      console.log(`   🍪 Cookie set (httpOnly, Secure, SameSite=None)`);
 
       return c.json(
         {
@@ -224,8 +224,8 @@ app.post("/api/login", async (c) => {
 
       setCookie(c, "auth_token", token, {
         httpOnly: true,
-        secure: NODE_ENV === "production",
-        sameSite: NODE_ENV === "production" ? "None" : "Lax",
+        secure: true, // PENTING: Always true untuk cross-domain
+        sameSite: "None", // PENTING: Allow cross-domain cookie
         maxAge: 86400,
         path: "/",
       });
