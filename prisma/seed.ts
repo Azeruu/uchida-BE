@@ -66,7 +66,13 @@ async function main() {
     });
 
     if (!exists) {
-      await prisma.testResult.create({ data });
+      await prisma.testResult.create({
+        data: {
+          ...data,
+          participantPendidikan: "SMA",
+          participantNoHp: "081234567890",
+        },
+      });
       console.log(`✅ Result created for: ${data.participantName}`);
     }
   }
