@@ -139,7 +139,7 @@ const authMiddleware = async (c: any, next: any) => {
   }
 
   try {
-    const decoded = await verify(token, JWT_SECRET);
+    const decoded = await verify(token, JWT_SECRET, "HS256"); // 🔴 ADD 'HS256'
     console.log(`   ✅ Token valid, user: ${decoded.email}`);
     c.set("user", decoded as any);
     await next();
@@ -174,7 +174,7 @@ const adminMiddleware = async (c: any, next: any) => {
   }
 
   try {
-    const decoded = await verify(token, JWT_SECRET);
+    const decoded = await verify(token, JWT_SECRET, "HS256"); // 🔴 ADD 'HS256'
 
     if (decoded.role !== "admin") {
       console.log(`   ❌ User not admin: ${decoded.role}`);
@@ -236,7 +236,7 @@ app.post("/api/test-jwt", async (c) => {
     console.log(`   JWT Secret: ${JWT_SECRET}`);
 
     try {
-      const decoded = await verify(token, JWT_SECRET);
+      const decoded = await verify(token, JWT_SECRET, "HS256"); // 🔴 ADD 'HS256'
       console.log(`   ✅ Token verified`);
       console.log(`   Decoded:`, decoded);
 
