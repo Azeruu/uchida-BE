@@ -214,6 +214,54 @@ app.get("/api/cors-test", (c) => {
   return c.json({ success: true, message: "CORS working" });
 });
 
+// ============ DEBUG JWT TEST ============
+app.post("/api/test-jwt", async (c) => {
+  try {
+    console.log("\n🧪 [TEST JWT]");
+
+    const { token } = await c.req.json();
+
+    if (!token) {
+      return c.json(
+        {
+          success: false,
+          error: "No token provided",
+          help: 'Send {"token": "your-token-here"}',
+        },
+        400,
+      );
+    }
+
+    console.log(`   Token: ${token.substring(0, 30)}...`);
+    console.log(`   JWT Secret: ${JWT_SECRET}`);
+
+    try {
+      const decoded = await verify(token, JWT_SECRET);
+      console.log(`   ✅ Token verified`);
+      console.log(`   Decoded:`, decoded);
+
+      return c.json({
+        success: true,
+        message: "Token is valid",
+        decoded,
+      });
+    } catch (err: any) {
+      console.log(`   ❌ Token verification failed: ${err.message}`);
+      return c.json(
+        {
+          success: false,
+          error: err.message,
+          hint: "Check if JWT_SECRET matches between login and verification",
+        },
+        401,
+      );
+    }
+  } catch (error: any) {
+    console.error("Test JWT error:", error.message);
+    return c.json({ success: false, error: error.message }, 500);
+  }
+});
+
 // ============ LOGIN - COOKIE BASED ============
 app.post("/api/login", async (c) => {
   try {
