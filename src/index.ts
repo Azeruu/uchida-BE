@@ -4,9 +4,7 @@ import { PrismaClient } from "./generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 import { cors } from "hono/cors";
-import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import { sign, verify } from "hono/jwt";
-import bcrypt from "bcryptjs";
+import { verifyToken, createClerkClient } from "@clerk/backend";
 import "dotenv/config";
 
 // ============ PRISMA SETUP ============
@@ -36,8 +34,13 @@ const prisma = globalForPrisma.prisma;
 // ============ CONFIG ============
 const NODE_ENV = process.env.NODE_ENV || "development";
 const PORT = Number(process.env.PORT) || 8080;
-const JWT_SECRET = process.env.JWT_SECRET || "uchida-jwt-secret-key-2026";
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+
+// Admin Emails helper (reads from both ADMIN_EMAILS or VITE_ADMIN_EMAILS for convenience)
+const getAdminEmails = (): string[] => {
+  const emailsStr = process.env.ADMIN_EMAILS || process.env.VITE_ADMIN_EMAILS || "";
+  return emailsStr.split(",").map(e => e.trim()).filter(Boolean);
+};
 
 const EXTRA_ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
@@ -52,18 +55,19 @@ const allowedOrigins = [
   ...EXTRA_ALLOWED_ORIGINS,
 ];
 
-console.log("\n🚀 SERVER CONFIG:");
-console.log("   NODE_ENV:", NODE_ENV);
-console.log("   PORT:", PORT);
-console.log("   FRONTEND_URL:", FRONTEND_URL);
-console.log("   Allowed Origins:", allowedOrigins.join(", "));
-console.log("");
+if (NODE_ENV !== "production") {
+  console.log("\n🚀 SERVER CONFIG:");
+  console.log("   NODE_ENV:", NODE_ENV);
+  console.log("   PORT:", PORT);
+  console.log("   FRONTEND_URL:", FRONTEND_URL);
+}
 
 // ============ TYPE ============
 type Variables = {
   user: {
     email: string;
     role: string;
+    id: string;
   };
 };
 
@@ -73,24 +77,16 @@ const app = new Hono<{ Variables: Variables }>();
 app.use(
   "/*",
   cors({
-    origin: (origin:any) => {
+    origin: (origin: any) => {
       if (!origin) return true;
-
       const isAllowed = allowedOrigins.some(
         (o) => origin.toLowerCase() === o.toLowerCase(),
       );
-
-      if (isAllowed) {
-        console.log(`✅ CORS: ${origin}`);
-        return origin;
-      }
-
-      console.log(`❌ CORS: ${origin}`);
-      return false;
+      return isAllowed ? origin : false;
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Accept", "Origin", "Authorization"], // 🔴 ADD Authorization
+    allowHeaders: ["Content-Type", "Accept", "Origin", "Authorization"],
     exposeHeaders: ["Set-Cookie"],
     maxAge: 86400,
   }),
@@ -109,84 +105,47 @@ app.use("/*", async (c, next) => {
   await next();
   const ms = Date.now() - start;
   const status = c.res.status;
-  console.log(
-    `${status === 200 ? "✅" : "❌"} ${c.req.method} ${c.req.path} [${ms}ms] ${status}`,
-  );
+  if (NODE_ENV !== "production" || status >= 400) {
+    console.log(`${status >= 400 ? "❌" : "✅"} ${c.req.method} ${c.req.path} [${ms}ms] ${status}`);
+  }
 });
-
-// ============ AUTH MIDDLEWARE - COOKIE + HEADER ============
-const authMiddleware = async (c: any, next: any) => {
-  console.log("\n🔐 [AUTH] Checking...");
-
-  // 1. Try cookie first
-  let token = getCookie(c, "auth_token");
-  if (token) {
-    console.log(`   🍪 Token from cookie`);
-  }
-
-  // 2. Try Authorization header
-  if (!token) {
-    const authHeader = c.req.header("Authorization");
-    if (authHeader?.startsWith("Bearer ")) {
-      token = authHeader.substring(7);
-      console.log(`   🔑 Token from Authorization header`);
-    }
-  }
-
-  if (!token) {
-    console.log(`   ❌ No token found`);
-    return c.json({ success: false, message: "Not authenticated" }, 401);
-  }
-
-  try {
-    const decoded = await verify(token, JWT_SECRET, "HS256"); // 🔴 ADD 'HS256'
-    console.log(`   ✅ Token valid, user: ${decoded.email}`);
-    c.set("user", decoded as any);
-    await next();
-  } catch (error: any) {
-    console.log(`   ❌ Token verification failed: ${error.message}`);
-    return c.json({ success: false, message: "Invalid token" }, 401);
-  }
-};
 
 // ============ ADMIN MIDDLEWARE ============
 const adminMiddleware = async (c: any, next: any) => {
-  console.log("\n🔐 [ADMIN AUTH] Checking...");
-
-  // 1. Try cookie first
-  let token = getCookie(c, "auth_token");
-  if (token) {
-    console.log(`   🍪 Token from cookie`);
-  }
-
-  // 2. Try Authorization header
-  if (!token) {
-    const authHeader = c.req.header("Authorization");
-    if (authHeader?.startsWith("Bearer ")) {
-      token = authHeader.substring(7);
-      console.log(`   🔑 Token from Authorization header`);
-    }
-  }
+  const authHeader = c.req.header("Authorization");
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : null;
 
   if (!token) {
-    console.log(`   ❌ No token found`);
-    return c.json({ success: false, message: "Not authenticated" }, 401);
+    return c.json({ success: false, message: "Missing authentication token" }, 401);
+  }
+
+  const secretKey = process.env.CLERK_SECRET_KEY;
+  if (!secretKey) {
+    console.error("❌ [AUTH] CLERK_SECRET_KEY is not configured in .env");
+    return c.json({ success: false, message: "Server configuration error" }, 500);
   }
 
   try {
-    const decoded = await verify(token, JWT_SECRET, "HS256"); // 🔴 ADD 'HS256'
+    const decoded = await verifyToken(token, { secretKey });
+    
+    // Check if email can be found in claims first (session tokens usually have it)
+    // Otherwise fetch from Clerk API
+    const clerkClient = createClerkClient({ secretKey });
+    const user = await clerkClient.users.getUser(decoded.sub);
+    const email = user.emailAddresses[0]?.emailAddress;
 
-    if (decoded.role !== "admin") {
-      console.log(`   ❌ User not admin: ${decoded.role}`);
-      return c.json({ success: false, message: "Access denied" }, 403);
+    const adminEmails = getAdminEmails();
+    
+    if (!email || !adminEmails.includes(email)) {
+      console.log(`🚫 [AUTH] Access denied for: ${email || 'unknown user'}`);
+      return c.json({ success: false, message: "Admin access required" }, 403);
     }
 
-    console.log(`   ✅ Admin user: ${decoded.email}`);
-    c.set("user", decoded as any);
+    c.set("user", { email, role: "admin", id: decoded.sub });
     await next();
   } catch (error: any) {
-    console.log(`   ❌ Token verification failed: ${error.message}`);
-    return c.json({ success: false, message: "Invalid token" }, 401);
+    console.log(`⚠️ [AUTH] Token invalid: ${error.message}`);
+    return c.json({ success: false, message: "Invalid or expired token" }, 401);
   }
 };
 
@@ -212,140 +171,6 @@ app.get("/api/health", (c) => {
 // CORS test
 app.get("/api/cors-test", (c) => {
   return c.json({ success: true, message: "CORS working" });
-});
-
-// ============ DEBUG JWT TEST ============
-app.post("/api/test-jwt", async (c) => {
-  try {
-    console.log("\n🧪 [TEST JWT]");
-
-    const { token } = await c.req.json();
-
-    if (!token) {
-      return c.json(
-        {
-          success: false,
-          error: "No token provided",
-          help: 'Send {"token": "your-token-here"}',
-        },
-        400,
-      );
-    }
-
-    console.log(`   Token: ${token.substring(0, 30)}...`);
-    console.log(`   JWT Secret: ${JWT_SECRET}`);
-
-    try {
-      const decoded = await verify(token, JWT_SECRET, "HS256"); // 🔴 ADD 'HS256'
-      console.log(`   ✅ Token verified`);
-      console.log(`   Decoded:`, decoded);
-
-      return c.json({
-        success: true,
-        message: "Token is valid",
-        decoded,
-      });
-    } catch (err: any) {
-      console.log(`   ❌ Token verification failed: ${err.message}`);
-      return c.json(
-        {
-          success: false,
-          error: err.message,
-          hint: "Check if JWT_SECRET matches between login and verification",
-        },
-        401,
-      );
-    }
-  } catch (error: any) {
-    console.error("Test JWT error:", error.message);
-    return c.json({ success: false, error: error.message }, 500);
-  }
-});
-
-// ============ LOGIN - COOKIE BASED ============
-app.post("/api/login", async (c) => {
-  try {
-    console.log("\n🔐 [LOGIN]");
-
-    const { email, password } = await c.req.json();
-    console.log(`   📧 Email: ${email}`);
-
-    // Admin hardcoded
-    if (email === "admin.kim@gmail.com" && password === "kimkantor1") {
-      console.log(`   ✅ Credentials valid`);
-
-      const token = await sign({ email, role: "admin" }, JWT_SECRET);
-
-      setCookie(c, "auth_token", token, {
-        httpOnly: true,
-        secure: true, // PENTING: Always true untuk cross-domain
-        sameSite: "None", // PENTING: Allow cross-domain cookie
-        maxAge: 86400,
-        path: "/",
-      });
-
-      console.log(`   🍪 Cookie set (httpOnly, Secure, SameSite=None)`);
-
-      return c.json(
-        {
-          success: true,
-          message: "Login successful",
-          token,
-          user: { email, role: "admin" },
-        },
-        200,
-      );
-    }
-
-    // Database check
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (user && (await bcrypt.compare(password, user.password))) {
-      console.log(`   ✅ Credentials valid`);
-
-      const token = await sign(
-        { email: user.email, role: user.role },
-        JWT_SECRET,
-      );
-
-      setCookie(c, "auth_token", token, {
-        httpOnly: true,
-        secure: true, // PENTING: Always true untuk cross-domain
-        sameSite: "None", // PENTING: Allow cross-domain cookie
-        maxAge: 86400,
-        path: "/",
-      });
-
-      return c.json(
-        {
-          success: true,
-          message: "Login successful",
-          token,
-          user: { email: user.email, role: user.role },
-        },
-        200,
-      );
-    }
-
-    console.log(`   ❌ Invalid credentials`);
-    return c.json({ success: false, message: "Invalid credentials" }, 401);
-  } catch (error: any) {
-    console.error("❌ Login error:", error.message);
-    return c.json({ success: false, message: "Server error" }, 500);
-  }
-});
-
-// ============ LOGOUT ============
-app.post("/api/logout", (c) => {
-  console.log("\n🚪 [LOGOUT]");
-  deleteCookie(c, "auth_token");
-  return c.json({ success: true, message: "Logged out" });
-});
-
-// ============ ME - With Auth ============
-app.get("/api/me", authMiddleware, (c) => {
-  const user = c.get("user");
-  console.log(`\n📋 [ME] User: ${user.email}`);
-  return c.json({ success: true, user });
 });
 
 // ============ CONFIG ============
@@ -481,7 +306,7 @@ app.post("/api/test-results", async (c) => {
   }
 });
 
-app.get("/api/test-results", async (c) => {
+app.get("/api/test-results", adminMiddleware, async (c) => {
   try {
     const results = await prisma.testResult.findMany({
       orderBy: { createdAt: "desc" },
@@ -494,7 +319,7 @@ app.get("/api/test-results", async (c) => {
   }
 });
 
-app.get("/api/test-results/:id", async (c) => {
+app.get("/api/test-results/:id", adminMiddleware, async (c) => {
   try {
     const id = c.req.param("id");
     const result = await prisma.testResult.findUnique({ where: { id } });
@@ -531,7 +356,7 @@ app.delete("/api/test-results/:id", adminMiddleware, async (c) => {
 });
 
 // ============ STATISTICS ============
-app.get("/api/statistics", async (c) => {
+app.get("/api/statistics", adminMiddleware, async (c) => {
   try {
     console.log("\n📊 [STATISTICS]");
 
